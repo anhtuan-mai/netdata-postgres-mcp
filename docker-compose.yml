@@ -40,6 +40,12 @@ services:
       NODE_ID: ${NODE_ID:-}
     ports:
       - "8765:8765"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8765/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
   # Optional: local Netdata agent for testing
   # Uncomment to run a Netdata agent alongside the sidecar.

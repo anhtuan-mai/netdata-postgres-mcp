@@ -465,7 +465,7 @@ func (c *Collector) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024)) // 50 MB cap
 }
 
 // setAuth adds authentication headers if an API key is configured.

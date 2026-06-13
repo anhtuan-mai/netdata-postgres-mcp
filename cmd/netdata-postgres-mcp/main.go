@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,7 +22,9 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/collector"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/config"
 	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
@@ -203,14 +206,26 @@ func runService() {
 	sched := scheduler.New(col, st, cfg.CollectionIntervalSeconds,
 		nodeID, hostname, cfg.NetdataBaseURL, logger)
 
-	// Start MCP HTTP/SSE server in background
+	// Build HTTP mux with health endpoints + MCP SSE server
 	mcpSrv := mcpserver.New(st.Pool(), logger)
 	sseServer := mcpstdio.NewSSEServer(mcpSrv.MCPServer())
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("/readyz", readyzHandler(st.Pool()))
+	mux.Handle("/", sseServer) // SSE + message endpoints
+
+	httpSrv := &http.Server{
+		Addr:              cfg.MCPBindAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	go func() {
-		logger.Info("MCP SSE server starting", "addr", cfg.MCPBindAddr)
-		if err := sseServer.Start(cfg.MCPBindAddr); err != nil && err != http.ErrServerClosed {
-			logger.Error("MCP server error", "error", err)
+		logger.Info("HTTP server starting", "addr", cfg.MCPBindAddr,
+			"endpoints", []string{"/healthz", "/readyz", "/sse", "/message"})
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP server error", "error", err)
 		}
 	}()
 
@@ -226,14 +241,29 @@ func runService() {
 		os.Exit(1)
 	}
 
-	logger.Info("shutting down")
+	// Graceful shutdown of HTTP/SSE server
+	logger.Info("shutting down HTTP server")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP server shutdown error", "error", err)
+	}
+	if err := sseServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("SSE server shutdown error", "error", err)
+	}
+
+	logger.Info("shutdown complete")
 }
 
 func runMCPOnly() {
 	cfg := loadConfig()
 	logger := newLogger(cfg.LogLevel)
 
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	st, err := store.New(ctx, cfg.PostgresDSN, logger)
 	if err != nil {
 		logger.Error("failed to connect to database", "error", err)
@@ -246,8 +276,43 @@ func runMCPOnly() {
 	// Use stdio transport for direct AI assistant connection
 	logger.Info("starting MCP server on stdio")
 	stdio := mcpstdio.NewStdioServer(mcpSrv.MCPServer())
-	if err := stdio.Listen(ctx, os.Stdin, os.Stdout); err != nil {
+	if err := stdio.Listen(ctx, os.Stdin, os.Stdout); err != nil && ctx.Err() == nil {
 		logger.Error("MCP stdio error", "error", err)
 		os.Exit(1)
+	}
+	logger.Info("MCP stdio server stopped")
+}
+
+// healthzHandler returns 200 if the process is alive.
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"version": version,
+	})
+}
+
+// readyzHandler returns 200 if the database is reachable, 503 otherwise.
+func readyzHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := pool.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "error",
+				"reason": "database unreachable",
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ready",
+		})
 	}
 }

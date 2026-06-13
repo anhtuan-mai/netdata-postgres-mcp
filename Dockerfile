@@ -20,9 +20,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata curl \
+    && adduser -D -u 1001 appuser
 
 COPY --from=builder /bin/netdata-postgres-mcp /usr/local/bin/netdata-postgres-mcp
+
+USER appuser
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:8765/healthz || exit 1
 
 ENTRYPOINT ["netdata-postgres-mcp"]
 CMD ["run"]

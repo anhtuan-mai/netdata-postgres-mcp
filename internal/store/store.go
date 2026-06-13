@@ -57,6 +57,13 @@ func New(ctx context.Context, dsn string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("parsing postgres DSN: %w", err)
 	}
 
+	// Sensible pool defaults for a sidecar workload.
+	poolCfg.MaxConns = 10
+	poolCfg.MinConns = 2
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	poolCfg.HealthCheckPeriod = 30 * time.Second
+
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to postgres: %w", err)
