@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Staticcheck
+        run: staticcheck ./...
+
+  test:
+    name: Test (Go ${{ matrix.go-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        go-version: ["1.23", "1.24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Run tests
+        run: go test -v -race -count=1 ./...
+
+      - name: Verify build
+        run: go build -o /dev/null ./cmd/netdata-postgres-mcp
+        if: runner.os != 'Windows'
+
+      - name: Verify build (Windows)
+        run: go build -o nul ./cmd/netdata-postgres-mcp
+        if: runner.os == 'Windows'
+
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags="-s -w" \
+            -o netdata-postgres-mcp-${{ matrix.suffix }} \
+            ./cmd/netdata-postgres-mcp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netdata-postgres-mcp-${{ matrix.suffix }}
+          path: netdata-postgres-mcp-${{ matrix.suffix }}
+          retention-days: 7

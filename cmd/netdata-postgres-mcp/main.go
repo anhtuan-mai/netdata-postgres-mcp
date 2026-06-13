@@ -31,7 +31,9 @@ import (
 	mcpstdio "github.com/mark3labs/mcp-go/server"
 )
 
-const version = "1.0.0"
+// version is set at build time via -ldflags "-X main.version=..."
+// Falls back to "dev" for local builds.
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
