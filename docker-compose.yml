@@ -1,0 +1,62 @@
+# netdata-postgres-mcp — Docker Compose
+#
+# Starts PostgreSQL, the netdata-postgres-mcp sidecar, and optionally a
+# Netdata agent for local testing.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f netdata-postgres-mcp
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: netdata
+      POSTGRES_PASSWORD: netdata
+      POSTGRES_DB: netdata_metrics
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netdata -d netdata_metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  netdata-postgres-mcp:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NETDATA_BASE_URL: ${NETDATA_BASE_URL:-http://host.docker.internal:19999}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgres://netdata:netdata@postgres:5432/netdata_metrics?sslmode=disable}
+      COLLECTION_INTERVAL_SECONDS: ${COLLECTION_INTERVAL_SECONDS:-60}
+      MCP_BIND_ADDR: ${MCP_BIND_ADDR:-0.0.0.0:8765}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ID: ${NODE_ID:-}
+    ports:
+      - "8765:8765"
+
+  # Optional: local Netdata agent for testing
+  # Uncomment to run a Netdata agent alongside the sidecar.
+  # netdata:
+  #   image: netdata/netdata:stable
+  #   restart: unless-stopped
+  #   cap_add:
+  #     - SYS_PTRACE
+  #     - SYS_ADMIN
+  #   security_opt:
+  #     - apparmor:unconfined
+  #   ports:
+  #     - "19999:19999"
+  #   volumes:
+  #     - /proc:/host/proc:ro
+  #     - /sys:/host/sys:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  pgdata:

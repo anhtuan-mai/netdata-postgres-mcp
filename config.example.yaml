@@ -1,0 +1,30 @@
+# netdata-postgres-mcp configuration
+# Environment variables override these values.
+
+netdata_base_url: http://localhost:19999
+# netdata_api_key: ""  # optional
+
+postgres_dsn: postgres://netdata:netdata@localhost:5432/netdata_metrics?sslmode=disable
+
+collection_interval_seconds: 60
+
+# node_id: ""  # auto-detected from Netdata or OS hostname if empty
+
+enabled_contexts:
+  - system.cpu
+  - system.ram
+  - system.swap
+  - system.io
+  - system.pgpgio
+  - system.ip
+  - disk.io
+  - disk.ops
+  - disk.util
+  - disk.space
+  - disk.inodes
+  - apps.cpu
+  - apps.mem
+
+mcp_bind_addr: 127.0.0.1:8765
+
+log_level: info
