@@ -175,6 +175,22 @@ func (s *Scheduler) retentionLoop(ctx context.Context) {
 }
 
 func (s *Scheduler) runRetention(ctx context.Context, retention time.Duration) {
+	// Run hourly rollup before deleting old samples (aggregate first, delete later).
+	hourlyBefore := time.Now().UTC().Add(-time.Hour) // aggregate up to 1 hour ago
+	if rolled, err := s.store.AggregateHourly(ctx, hourlyBefore); err != nil {
+		s.logger.Error("hourly rollup failed", "error", err)
+	} else if rolled > 0 {
+		s.logger.Info("hourly rollup complete", "rows_upserted", rolled)
+	}
+
+	// Run daily rollup from hourly data
+	dailyBefore := time.Now().UTC().Add(-24 * time.Hour) // aggregate up to 1 day ago
+	if rolled, err := s.store.AggregateDaily(ctx, dailyBefore); err != nil {
+		s.logger.Error("daily rollup failed", "error", err)
+	} else if rolled > 0 {
+		s.logger.Info("daily rollup complete", "rows_upserted", rolled)
+	}
+
 	deleted, err := s.store.DeleteOldSamples(ctx, retention)
 	if err != nil {
 		s.logger.Error("retention cleanup failed", "error", err)

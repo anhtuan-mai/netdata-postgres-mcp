@@ -1,0 +1,47 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: should render with defaults
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "netdata-postgres-mcp:.*"
+
+  - it: should set environment variables
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POSTGRES_DSN
+          any: true
+
+  - it: should set resource limits when specified
+    set:
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+
+  - it: should set replicas
+    set:
+      replicaCount: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3

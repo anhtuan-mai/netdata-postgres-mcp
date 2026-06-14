@@ -1,0 +1,26 @@
+suite: service
+templates:
+  - templates/service.yaml
+tests:
+  - it: should render a ClusterIP service
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - contains:
+          path: spec.ports
+          content:
+            port: 8765
+          any: true
+
+  - it: should use NodePort when specified
+    set:
+      service:
+        type: NodePort
+        nodePort: 30765
+    asserts:
+      - equal:
+          path: spec.type
+          value: NodePort

@@ -132,6 +132,10 @@ func newLogger(level, format string) *slog.Logger {
 	} else {
 		handler = slog.NewTextHandler(os.Stderr, opts)
 	}
+
+	// Wrap with trace ID correlation if tracing may be active
+	handler = tracing.NewLogHandler(handler)
+
 	return slog.New(handler)
 }
 

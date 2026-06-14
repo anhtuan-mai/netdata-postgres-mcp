@@ -1,4 +1,4 @@
-.PHONY: build test lint vet clean docker cross-compile
+.PHONY: build test lint vet clean docker cross-compile bench fuzz e2e
 
 BINARY    := netdata-postgres-mcp
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -51,3 +51,18 @@ run: build
 ## help: Show this help
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | column -t -s ':'
+
+## bench: Run benchmarks
+bench:
+	$(GO) test -bench=. -benchmem -count=3 ./...
+
+## fuzz: Run fuzz tests (30s each)
+fuzz:
+	$(GO) test -fuzz=FuzzParseTimeArg -fuzztime=30s ./internal/mcp/
+	$(GO) test -fuzz=FuzzRound2 -fuzztime=30s ./internal/mcp/
+	$(GO) test -fuzz=FuzzDetectBottlenecks -fuzztime=30s ./internal/mcp/
+	$(GO) test -fuzz=FuzzBuildSummary -fuzztime=30s ./internal/mcp/
+
+## e2e: Run end-to-end tests via Docker Compose
+e2e:
+	./scripts/e2e-test.sh

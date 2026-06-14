@@ -45,9 +45,10 @@ type Config struct {
 	RetentionDays             int      `yaml:"retention_days"`
 	MCPAuthToken              string   `yaml:"mcp_auth_token"`
 	RateLimitRPS              float64  `yaml:"rate_limit_rps"`
-	TLSCertFile               string       `yaml:"tls_cert_file"`
-	TLSKeyFile                string       `yaml:"tls_key_file"`
-	Nodes                     []NodeConfig `yaml:"nodes"`
+	TLSCertFile               string           `yaml:"tls_cert_file"`
+	TLSKeyFile                string           `yaml:"tls_key_file"`
+	Nodes                     []NodeConfig     `yaml:"nodes"`
+	DerivedContexts           []DerivedContext  `yaml:"derived_contexts"`
 }
 
 // NodeConfig defines a single Netdata node to collect from.

@@ -1,0 +1,111 @@
+# docker-compose.e2e.yml — End-to-end test stack
+#
+# Spins up PostgreSQL + Netdata + sidecar, waits for health, then
+# the test runner verifies MCP endpoints return correct data.
+#
+# Usage: ./scripts/e2e-test.sh
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: netdata
+      POSTGRES_PASSWORD: netdata
+      POSTGRES_DB: netdata_metrics_e2e
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netdata -d netdata_metrics_e2e"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  netdata:
+    image: netdata/netdata:stable
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:19999/api/v1/info"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  sidecar:
+    build:
+      context: .
+      args:
+        VERSION: e2e-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      netdata:
+        condition: service_healthy
+    environment:
+      NETDATA_BASE_URL: http://netdata:19999
+      POSTGRES_DSN: postgres://netdata:netdata@postgres:5432/netdata_metrics_e2e?sslmode=disable
+      COLLECTION_INTERVAL_SECONDS: 5
+      MCP_BIND_ADDR: 0.0.0.0:8765
+      LOG_LEVEL: debug
+      LOG_FORMAT: json
+      RETENTION_DAYS: 1
+    healthcheck:
+      test: ["CMD", "netdata-postgres-mcp", "version"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
+
+  e2e-runner:
+    image: curlimages/curl:latest
+    depends_on:
+      sidecar:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "=== E2E Test Suite ==="
+
+        # Wait for at least one collection cycle (5s interval + buffer)
+        echo "Waiting 15s for initial collection..."
+        sleep 15
+
+        echo ""
+        echo "--- Test 1: /healthz returns 200 ---"
+        STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://sidecar:8765/healthz)
+        if [ "$$STATUS" != "200" ]; then echo "FAIL: /healthz returned $$STATUS"; exit 1; fi
+        BODY=$(curl -sf http://sidecar:8765/healthz)
+        echo "$$BODY" | grep -q '"status"' || { echo "FAIL: /healthz missing status"; exit 1; }
+        echo "PASS"
+
+        echo ""
+        echo "--- Test 2: /readyz returns 200 ---"
+        STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://sidecar:8765/readyz)
+        if [ "$$STATUS" != "200" ]; then echo "FAIL: /readyz returned $$STATUS"; exit 1; fi
+        BODY=$(curl -sf http://sidecar:8765/readyz)
+        echo "$$BODY" | grep -q '"ready"' || { echo "FAIL: /readyz not ready"; exit 1; }
+        echo "PASS"
+
+        echo ""
+        echo "--- Test 3: /metrics returns Prometheus format ---"
+        BODY=$(curl -sf http://sidecar:8765/metrics)
+        echo "$$BODY" | grep -q 'netdata_mcp_collections_total' || { echo "FAIL: missing collections_total"; exit 1; }
+        echo "$$BODY" | grep -q 'netdata_mcp_samples_inserted_total' || { echo "FAIL: missing samples_inserted"; exit 1; }
+        echo "PASS"
+
+        echo ""
+        echo "--- Test 4: /metrics shows collections > 0 ---"
+        COLLECTIONS=$(echo "$$BODY" | grep '^netdata_mcp_collections_total' | awk '{print $$2}')
+        if [ "$$COLLECTIONS" = "0" ]; then echo "FAIL: no collections recorded"; exit 1; fi
+        echo "PASS (collections=$$COLLECTIONS)"
+
+        echo ""
+        echo "--- Test 5: /metrics shows samples > 0 ---"
+        SAMPLES=$(echo "$$BODY" | grep '^netdata_mcp_samples_inserted_total' | awk '{print $$2}')
+        if [ "$$SAMPLES" = "0" ]; then echo "FAIL: no samples inserted"; exit 1; fi
+        echo "PASS (samples=$$SAMPLES)"
+
+        echo ""
+        echo "=== All 5 E2E tests passed ==="

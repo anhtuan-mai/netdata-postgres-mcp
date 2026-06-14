@@ -43,6 +43,12 @@ jobs:
           - goos: linux
             goarch: arm64
             suffix: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
           - goos: windows
             goarch: amd64
             suffix: windows-amd64.exe
@@ -114,5 +120,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

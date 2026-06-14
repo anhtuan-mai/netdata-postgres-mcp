@@ -80,6 +80,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger) *Server {
 	), s.handleBottlenecks)
 
 	s.srv = srv
+	s.registerAlertTools()
 	return s
 }
 

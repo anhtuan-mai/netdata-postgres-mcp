@@ -1,7 +1,9 @@
-# Build stage
-FROM golang:1.23-alpine AS builder
+# Build stage — multi-arch
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git
 
@@ -12,23 +14,19 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /bin/netdata-postgres-mcp \
     ./cmd/netdata-postgres-mcp
 
-# Runtime stage
-FROM alpine:3.20
-
-RUN apk add --no-cache ca-certificates tzdata curl \
-    && adduser -D -u 1001 appuser
+# Runtime stage — distroless for minimal attack surface
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /bin/netdata-postgres-mcp /usr/local/bin/netdata-postgres-mcp
 
-USER appuser
+USER nonroot:nonroot
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -sf http://localhost:8765/healthz || exit 1
+EXPOSE 8765
 
 ENTRYPOINT ["netdata-postgres-mcp"]
 CMD ["run"]
