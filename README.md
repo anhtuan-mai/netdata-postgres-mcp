@@ -84,6 +84,9 @@ All configuration can be set via YAML file and/or environment variables. Environ
 | `ENABLED_CONTEXTS` | `enabled_contexts` | see below | Comma-separated metric contexts |
 | `MCP_BIND_ADDR` | `mcp_bind_addr` | `127.0.0.1:8765` | MCP HTTP/SSE server address |
 | `LOG_LEVEL` | `log_level` | `info` | Log level: debug, info, warn, error |
+| `LOG_FORMAT` | `log_format` | `text` | Log format: text, json |
+| `RETENTION_DAYS` | `retention_days` | `30` | Auto-delete samples older than N days (0 to disable) |
+| `MCP_AUTH_TOKEN` | `mcp_auth_token` | _(empty)_ | Bearer token for MCP endpoints (no auth if empty) |
 | `CONFIG_FILE` | — | _(none)_ | Path to YAML config file |
 
 **Default enabled contexts:** `system.cpu`, `system.ram`, `system.swap`, `system.io`, `system.pgpgio`, `system.ip`, `disk.io`, `disk.ops`, `disk.util`, `disk.space`, `disk.inodes`, `apps.cpu`, `apps.mem`
@@ -155,6 +158,8 @@ GET /api/v3/allmetrics?format=prometheus&source=average
 | `netdata-postgres-mcp collect-once` | Collect metrics once and exit |
 | `netdata-postgres-mcp run` | Start scheduler + MCP HTTP/SSE server |
 | `netdata-postgres-mcp mcp` | Start MCP server on stdio (for direct AI connection) |
+| `netdata-postgres-mcp version` | Show version |
+| `netdata-postgres-mcp help` | Show usage help |
 
 ## MCP tools
 
@@ -249,6 +254,105 @@ These are normal — the unique constraint prevents storing the same metric twic
 
 ### High memory usage
 Reduce the number of enabled contexts or increase the collection interval. Each context can generate many dimensions (one per disk, per mount point, per app, etc.).
+
+## Production features
+
+### Health endpoints
+
+The HTTP server (started by `run`) exposes health endpoints that are **not** protected by auth:
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | Liveness — returns `200` with `{"status":"ok","version":"..."}` |
+| `GET /readyz` | Readiness — pings PostgreSQL, returns `200` or `503` |
+| `GET /metrics` | Prometheus-compatible self-observability metrics |
+
+### Prometheus metrics
+
+The `/metrics` endpoint exposes counters in Prometheus exposition format:
+
+- `netdata_mcp_collections_total` — total collection cycles
+- `netdata_mcp_collection_errors_total` — failed collection cycles
+- `netdata_mcp_samples_inserted_total` — metric samples inserted into PostgreSQL
+- `netdata_mcp_retention_deleted_total` — expired samples deleted by retention cleanup
+- `netdata_mcp_collection_duration_seconds` — duration of collection cycles (last, avg, count)
+
+Add a scrape target in your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: netdata-mcp
+    static_configs:
+      - targets: ['localhost:8765']
+```
+
+### Grafana dashboard
+
+Import `grafana/dashboard.json` into Grafana for a pre-built dashboard with collection rates, error rates, sample insertion rates, and collection duration charts.
+
+### Authentication
+
+Set `MCP_AUTH_TOKEN` to protect the MCP SSE/message endpoints with bearer token auth:
+
+```bash
+export MCP_AUTH_TOKEN="my-secret-token"
+```
+
+Clients must provide `Authorization: Bearer <token>` header, or `?token=<token>` query parameter for SSE clients that cannot set custom headers.
+
+### Data retention
+
+Samples older than `RETENTION_DAYS` are automatically deleted daily. Set to `0` to disable.
+
+### JSON logging
+
+Set `LOG_FORMAT=json` for structured JSON log output suitable for log aggregation systems (ELK, Loki, etc.).
+
+### Graceful shutdown
+
+The service handles `SIGINT`/`SIGTERM` with a 10-second grace period, draining HTTP connections and completing in-flight collection cycles.
+
+### Collection retry
+
+Failed collection cycles are automatically retried up to 3 times with exponential backoff (1s, 2s).
+
+## Building
+
+### From source
+
+```bash
+make build                  # build binary
+make test                   # run tests
+make lint                   # run go vet + staticcheck
+make cross-compile          # build for linux/amd64, linux/arm64, darwin/amd64, windows/amd64
+```
+
+### Docker
+
+```bash
+make docker                 # build Docker image
+# or
+docker build --build-arg VERSION=1.0.0 -t netdata-postgres-mcp .
+```
+
+### Version injection
+
+The version is injected at build time via ldflags:
+
+```bash
+go build -ldflags "-X main.version=1.0.0" -o netdata-postgres-mcp ./cmd/netdata-postgres-mcp
+```
+
+## CI/CD
+
+GitHub Actions workflows are provided:
+
+- **ci.yml** — runs on push/PR: linting (`go vet` + `staticcheck`), tests (Go 1.23/1.24 × Ubuntu/Windows matrix), cross-compilation
+- **release.yml** — runs on `v*` tags: builds release binaries with SHA256 checksums, pushes multi-arch Docker image to `ghcr.io`
+
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed multi-node deployment guides covering Ubuntu, RHEL, and Windows Server.
 
 ## License
 

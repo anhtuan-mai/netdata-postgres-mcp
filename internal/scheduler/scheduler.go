@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/collector"
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/store"
 )
 
@@ -122,6 +123,7 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 	}
 	if lastErr != nil && len(samples) == 0 {
 		s.logger.Error("failed to collect metrics after 3 attempts", "error", lastErr)
+		metrics.Global.CollectionErrors.Add(1)
 		return lastErr
 	}
 
@@ -138,6 +140,10 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 	}
 
 	elapsed := time.Since(start)
+	metrics.Global.CollectionTotal.Add(1)
+	metrics.Global.SamplesInserted.Add(inserted)
+	metrics.Global.CollectionDuration.Record(elapsed)
+
 	s.logger.Info("collection cycle complete",
 		"samples_collected", len(samples),
 		"samples_inserted", inserted,
@@ -175,6 +181,7 @@ func (s *Scheduler) runRetention(ctx context.Context, retention time.Duration) {
 		return
 	}
 	if deleted > 0 {
+		metrics.Global.RetentionDeleted.Add(deleted)
 		s.logger.Info("retention cleanup complete", "deleted", deleted)
 	}
 }

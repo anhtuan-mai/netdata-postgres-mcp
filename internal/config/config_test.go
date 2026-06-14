@@ -12,147 +12,182 @@ func TestDefaults(t *testing.T) {
 	cfg := Defaults()
 
 	if cfg.NetdataBaseURL != "http://localhost:19999" {
-		t.Errorf("expected default NetdataBaseURL http://localhost:19999, got %s", cfg.NetdataBaseURL)
+		t.Errorf("NetdataBaseURL = %q, want %q", cfg.NetdataBaseURL, "http://localhost:19999")
 	}
 	if cfg.CollectionIntervalSeconds != 60 {
-		t.Errorf("expected default interval 60, got %d", cfg.CollectionIntervalSeconds)
+		t.Errorf("CollectionIntervalSeconds = %d, want 60", cfg.CollectionIntervalSeconds)
 	}
 	if cfg.MCPBindAddr != "127.0.0.1:8765" {
-		t.Errorf("expected default MCPBindAddr 127.0.0.1:8765, got %s", cfg.MCPBindAddr)
+		t.Errorf("MCPBindAddr = %q, want %q", cfg.MCPBindAddr, "127.0.0.1:8765")
 	}
 	if cfg.LogLevel != "info" {
-		t.Errorf("expected default LogLevel info, got %s", cfg.LogLevel)
+		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "info")
 	}
-	if len(cfg.EnabledContexts) != len(DefaultContexts) {
-		t.Errorf("expected %d default contexts, got %d", len(DefaultContexts), len(cfg.EnabledContexts))
+	if cfg.LogFormat != "text" {
+		t.Errorf("LogFormat = %q, want %q", cfg.LogFormat, "text")
+	}
+	if cfg.RetentionDays != 30 {
+		t.Errorf("RetentionDays = %d, want 30", cfg.RetentionDays)
+	}
+	if len(cfg.EnabledContexts) == 0 {
+		t.Error("EnabledContexts should not be empty")
+	}
+}
+
+func TestValidate_MissingDSN(t *testing.T) {
+	cfg := Defaults()
+	cfg.PostgresDSN = ""
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing PostgresDSN")
+	}
+}
+
+func TestValidate_BadInterval(t *testing.T) {
+	cfg := Defaults()
+	cfg.PostgresDSN = "postgres://localhost/test"
+	cfg.CollectionIntervalSeconds = 0
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for zero interval")
+	}
+}
+
+func TestValidate_EmptyContexts(t *testing.T) {
+	cfg := Defaults()
+	cfg.PostgresDSN = "postgres://localhost/test"
+	cfg.EnabledContexts = nil
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for empty contexts")
+	}
+}
+
+func TestValidate_OK(t *testing.T) {
+	cfg := Defaults()
+	cfg.PostgresDSN = "postgres://localhost/test"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadFromEnv(t *testing.T) {
+	envs := map[string]string{
+		"NETDATA_BASE_URL":            "http://10.0.0.1:19999",
+		"POSTGRES_DSN":                "postgres://u:p@db:5432/metrics",
+		"COLLECTION_INTERVAL_SECONDS": "30",
+		"NODE_ID":                     "test-node-1",
+		"ENABLED_CONTEXTS":            "system.cpu,system.ram",
+		"MCP_BIND_ADDR":               "0.0.0.0:9000",
+		"LOG_LEVEL":                   "debug",
+		"LOG_FORMAT":                   "json",
+		"RETENTION_DAYS":              "7",
+		"MCP_AUTH_TOKEN":              "secret123",
+	}
+	for k, v := range envs {
+		t.Setenv(k, v)
+	}
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.NetdataBaseURL != "http://10.0.0.1:19999" {
+		t.Errorf("NetdataBaseURL = %q, want %q", cfg.NetdataBaseURL, "http://10.0.0.1:19999")
+	}
+	if cfg.PostgresDSN != "postgres://u:p@db:5432/metrics" {
+		t.Errorf("PostgresDSN = %q", cfg.PostgresDSN)
+	}
+	if cfg.CollectionIntervalSeconds != 30 {
+		t.Errorf("CollectionIntervalSeconds = %d, want 30", cfg.CollectionIntervalSeconds)
+	}
+	if cfg.NodeID != "test-node-1" {
+		t.Errorf("NodeID = %q, want %q", cfg.NodeID, "test-node-1")
+	}
+	if len(cfg.EnabledContexts) != 2 || cfg.EnabledContexts[0] != "system.cpu" {
+		t.Errorf("EnabledContexts = %v", cfg.EnabledContexts)
+	}
+	if cfg.MCPBindAddr != "0.0.0.0:9000" {
+		t.Errorf("MCPBindAddr = %q", cfg.MCPBindAddr)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q", cfg.LogLevel)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q", cfg.LogFormat)
+	}
+	if cfg.RetentionDays != 7 {
+		t.Errorf("RetentionDays = %d, want 7", cfg.RetentionDays)
+	}
+	if cfg.MCPAuthToken != "secret123" {
+		t.Errorf("MCPAuthToken = %q", cfg.MCPAuthToken)
 	}
 }
 
 func TestLoadFromYAML(t *testing.T) {
-	yamlContent := `
-netdata_base_url: http://remote:19999
-postgres_dsn: postgres://user:pass@db:5432/metrics
-collection_interval_seconds: 30
-node_id: test-node
+	yaml := `
+netdata_base_url: http://yaml-host:19999
+postgres_dsn: postgres://yaml@localhost/db
+collection_interval_seconds: 120
+log_level: warn
+log_format: json
+retention_days: 14
 enabled_contexts:
   - system.cpu
-  - system.ram
-mcp_bind_addr: 0.0.0.0:9999
-log_level: debug
 `
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.NetdataBaseURL != "http://remote:19999" {
-		t.Errorf("expected http://remote:19999, got %s", cfg.NetdataBaseURL)
-	}
-	if cfg.PostgresDSN != "postgres://user:pass@db:5432/metrics" {
-		t.Errorf("expected postgres DSN from file, got %s", cfg.PostgresDSN)
-	}
-	if cfg.CollectionIntervalSeconds != 30 {
-		t.Errorf("expected 30, got %d", cfg.CollectionIntervalSeconds)
-	}
-	if cfg.NodeID != "test-node" {
-		t.Errorf("expected test-node, got %s", cfg.NodeID)
-	}
-	if len(cfg.EnabledContexts) != 2 {
-		t.Errorf("expected 2 contexts, got %d", len(cfg.EnabledContexts))
-	}
-	if cfg.MCPBindAddr != "0.0.0.0:9999" {
-		t.Errorf("expected 0.0.0.0:9999, got %s", cfg.MCPBindAddr)
-	}
-	if cfg.LogLevel != "debug" {
-		t.Errorf("expected debug, got %s", cfg.LogLevel)
-	}
-}
-
-func TestEnvOverridesFile(t *testing.T) {
-	yamlContent := `
-netdata_base_url: http://file:19999
-postgres_dsn: postgres://file@db/metrics
-collection_interval_seconds: 30
-`
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("NETDATA_BASE_URL", "http://env:19999")
-	t.Setenv("POSTGRES_DSN", "postgres://env@db/metrics")
-	t.Setenv("COLLECTION_INTERVAL_SECONDS", "120")
-	t.Setenv("NODE_ID", "env-node")
-	t.Setenv("ENABLED_CONTEXTS", "system.cpu, system.ram, system.io")
-	t.Setenv("MCP_BIND_ADDR", "0.0.0.0:7777")
-	t.Setenv("LOG_LEVEL", "warn")
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if cfg.NetdataBaseURL != "http://env:19999" {
-		t.Errorf("env override failed for NetdataBaseURL: got %s", cfg.NetdataBaseURL)
-	}
-	if cfg.PostgresDSN != "postgres://env@db/metrics" {
-		t.Errorf("env override failed for PostgresDSN: got %s", cfg.PostgresDSN)
+	if cfg.NetdataBaseURL != "http://yaml-host:19999" {
+		t.Errorf("NetdataBaseURL = %q", cfg.NetdataBaseURL)
 	}
 	if cfg.CollectionIntervalSeconds != 120 {
-		t.Errorf("env override failed for interval: got %d", cfg.CollectionIntervalSeconds)
+		t.Errorf("CollectionIntervalSeconds = %d, want 120", cfg.CollectionIntervalSeconds)
 	}
-	if cfg.NodeID != "env-node" {
-		t.Errorf("env override failed for NodeID: got %s", cfg.NodeID)
+	if cfg.RetentionDays != 14 {
+		t.Errorf("RetentionDays = %d, want 14", cfg.RetentionDays)
 	}
-	if len(cfg.EnabledContexts) != 3 {
-		t.Errorf("env override failed for contexts: got %d", len(cfg.EnabledContexts))
-	}
-	if cfg.MCPBindAddr != "0.0.0.0:7777" {
-		t.Errorf("env override failed for MCPBindAddr: got %s", cfg.MCPBindAddr)
-	}
-	if cfg.LogLevel != "warn" {
-		t.Errorf("env override failed for LogLevel: got %s", cfg.LogLevel)
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want json", cfg.LogFormat)
 	}
 }
 
-func TestValidateMissingDSN(t *testing.T) {
-	cfg := Defaults()
-	// No DSN set
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected validation error for missing postgres_dsn")
-	}
-}
-
-func TestValidateBadInterval(t *testing.T) {
-	cfg := Defaults()
-	cfg.PostgresDSN = "postgres://test@localhost/db"
-	cfg.CollectionIntervalSeconds = 0
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected validation error for zero interval")
-	}
-}
-
-func TestLoadNoFile(t *testing.T) {
-	t.Setenv("POSTGRES_DSN", "postgres://test@localhost/db")
-	cfg, err := Load("")
-	if err != nil {
+func TestEnvOverridesYAML(t *testing.T) {
+	yaml := `
+postgres_dsn: postgres://yaml@localhost/db
+log_level: warn
+`
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PostgresDSN != "postgres://test@localhost/db" {
-		t.Errorf("expected DSN from env, got %s", cfg.PostgresDSN)
+
+	t.Setenv("LOG_LEVEL", "error")
+	t.Setenv("POSTGRES_DSN", "postgres://env@localhost/db")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.LogLevel != "error" {
+		t.Errorf("LogLevel = %q, want %q (env should override YAML)", cfg.LogLevel, "error")
+	}
+	if cfg.PostgresDSN != "postgres://env@localhost/db" {
+		t.Errorf("PostgresDSN = %q, want env override", cfg.PostgresDSN)
 	}
 }
 
-func TestLoadMissingFile(t *testing.T) {
+func TestLoadBadFile(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err == nil {
-		t.Error("expected error for missing config file")
+		t.Error("expected error for nonexistent file")
 	}
 }

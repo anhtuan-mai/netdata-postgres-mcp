@@ -28,6 +28,7 @@ import (
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/collector"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/config"
 	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/scheduler"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/store"
 
@@ -88,6 +89,7 @@ Environment:
   ENABLED_CONTEXTS             Comma-separated metric contexts
   MCP_BIND_ADDR                MCP HTTP server address (default: 127.0.0.1:8765)
   LOG_LEVEL                    Log level: debug, info, warn, error (default: info)
+  LOG_FORMAT                   Log format: text, json (default: text)
   RETENTION_DAYS               Delete samples older than N days (default: 30, 0 to disable)
   MCP_AUTH_TOKEN               Bearer token for MCP endpoints (optional, no auth if empty)
 `, version)
@@ -103,7 +105,7 @@ func loadConfig() config.Config {
 	return cfg
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level, format string) *slog.Logger {
 	var logLevel slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -116,14 +118,19 @@ func newLogger(level string) *slog.Logger {
 		logLevel = slog.LevelInfo
 	}
 
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: logLevel,
-	}))
+	opts := &slog.HandlerOptions{Level: logLevel}
+	var handler slog.Handler
+	if strings.ToLower(format) == "json" {
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	}
+	return slog.New(handler)
 }
 
 func runMigrate() {
 	cfg := loadConfig()
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(cfg.LogLevel, cfg.LogFormat)
 
 	ctx := context.Background()
 	st, err := store.New(ctx, cfg.PostgresDSN, logger)
@@ -143,7 +150,7 @@ func runMigrate() {
 
 func runCollectOnce() {
 	cfg := loadConfig()
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(cfg.LogLevel, cfg.LogFormat)
 
 	ctx := context.Background()
 	st, err := store.New(ctx, cfg.PostgresDSN, logger)
@@ -176,7 +183,7 @@ func runCollectOnce() {
 
 func runService() {
 	cfg := loadConfig()
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(cfg.LogLevel, cfg.LogFormat)
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
@@ -216,6 +223,7 @@ func runService() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler(st.Pool()))
+	mux.HandleFunc("/metrics", metrics.Handler())
 
 	// Wrap MCP endpoints with auth middleware if configured
 	var mcpHandler http.Handler = sseServer
@@ -233,7 +241,7 @@ func runService() {
 
 	go func() {
 		logger.Info("HTTP server starting", "addr", cfg.MCPBindAddr,
-			"endpoints", []string{"/healthz", "/readyz", "/sse", "/message"})
+			"endpoints", []string{"/healthz", "/readyz", "/metrics", "/sse", "/message"})
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server error", "error", err)
 		}
@@ -268,7 +276,7 @@ func runService() {
 
 func runMCPOnly() {
 	cfg := loadConfig()
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(cfg.LogLevel, cfg.LogFormat)
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)

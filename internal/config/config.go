@@ -41,6 +41,7 @@ type Config struct {
 	EnabledContexts           []string `yaml:"enabled_contexts"`
 	MCPBindAddr               string   `yaml:"mcp_bind_addr"`
 	LogLevel                  string   `yaml:"log_level"`
+	LogFormat                 string   `yaml:"log_format"`
 	RetentionDays             int      `yaml:"retention_days"`
 	MCPAuthToken              string   `yaml:"mcp_auth_token"`
 }
@@ -53,6 +54,7 @@ func Defaults() Config {
 		EnabledContexts:           append([]string{}, DefaultContexts...),
 		MCPBindAddr:               "127.0.0.1:8765",
 		LogLevel:                  "info",
+		LogFormat:                 "text",
 		RetentionDays:             30,
 	}
 }
@@ -132,6 +134,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		cfg.LogFormat = v
 	}
 	if v := os.Getenv("RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
