@@ -88,7 +88,16 @@ func (s *Store) Pool() *pgxpool.Pool {
 }
 
 // Migrate runs all SQL migration files in order.
+// Uses an advisory lock to prevent concurrent migrations from multiple instances.
 func (s *Store) Migrate(ctx context.Context) error {
+	// Acquire advisory lock to prevent concurrent migration runs.
+	// Lock ID 0x4e44_4d43 = "NDMC" (Netdata MCP) as a unique identifier.
+	const lockID = 0x4e444d43
+	if _, err := s.pool.Exec(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+		return fmt.Errorf("acquiring migration lock: %w", err)
+	}
+	defer s.pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID)
+
 	// Create migrations tracking table
 	_, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -289,4 +298,16 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeInfo, error) {
 	}
 
 	return nodes, rows.Err()
+}
+
+// DeleteOldSamples removes metric samples older than the given duration.
+// Returns the number of rows deleted.
+func (s *Store) DeleteOldSamples(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	tag, err := s.pool.Exec(ctx,
+		"DELETE FROM hardware_metric_samples WHERE collected_at < $1", cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("deleting old samples: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

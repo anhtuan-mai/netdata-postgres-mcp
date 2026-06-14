@@ -33,24 +33,27 @@ var DefaultContexts = []string{
 
 // Config holds all configuration for the sidecar service.
 type Config struct {
-	NetdataBaseURL           string   `yaml:"netdata_base_url"`
-	NetdataAPIKey            string   `yaml:"netdata_api_key"`
-	PostgresDSN              string   `yaml:"postgres_dsn"`
+	NetdataBaseURL            string   `yaml:"netdata_base_url"`
+	NetdataAPIKey             string   `yaml:"netdata_api_key"`
+	PostgresDSN               string   `yaml:"postgres_dsn"`
 	CollectionIntervalSeconds int      `yaml:"collection_interval_seconds"`
-	NodeID                   string   `yaml:"node_id"`
-	EnabledContexts          []string `yaml:"enabled_contexts"`
-	MCPBindAddr              string   `yaml:"mcp_bind_addr"`
-	LogLevel                 string   `yaml:"log_level"`
+	NodeID                    string   `yaml:"node_id"`
+	EnabledContexts           []string `yaml:"enabled_contexts"`
+	MCPBindAddr               string   `yaml:"mcp_bind_addr"`
+	LogLevel                  string   `yaml:"log_level"`
+	RetentionDays             int      `yaml:"retention_days"`
+	MCPAuthToken              string   `yaml:"mcp_auth_token"`
 }
 
 // Defaults returns a Config with all default values applied.
 func Defaults() Config {
 	return Config{
-		NetdataBaseURL:           "http://localhost:19999",
+		NetdataBaseURL:            "http://localhost:19999",
 		CollectionIntervalSeconds: 60,
-		EnabledContexts:          append([]string{}, DefaultContexts...),
-		MCPBindAddr:              "127.0.0.1:8765",
-		LogLevel:                 "info",
+		EnabledContexts:           append([]string{}, DefaultContexts...),
+		MCPBindAddr:               "127.0.0.1:8765",
+		LogLevel:                  "info",
+		RetentionDays:             30,
 	}
 }
 
@@ -129,5 +132,13 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
+	}
+	if v := os.Getenv("RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.RetentionDays = n
+		}
+	}
+	if v := os.Getenv("MCP_AUTH_TOKEN"); v != "" {
+		cfg.MCPAuthToken = v
 	}
 }

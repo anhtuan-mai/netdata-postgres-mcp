@@ -90,7 +90,15 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 
 // --- Tool Handlers ---
 
+// withTimeout wraps a context with a 30-second deadline for database queries.
+func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, 30*time.Second)
+}
+
 func (s *Server) handleListNodes(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			n.node_id,
@@ -128,6 +136,9 @@ func (s *Server) handleListNodes(ctx context.Context, req mcp.CallToolRequest) (
 }
 
 func (s *Server) handleLatestMetrics(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	nodeID, _ := req.Params.Arguments["node_id"].(string)
 	contextsStr, _ := req.Params.Arguments["contexts"].(string)
 
@@ -186,6 +197,9 @@ func (s *Server) handleLatestMetrics(ctx context.Context, req mcp.CallToolReques
 }
 
 func (s *Server) handleQueryMetrics(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	nodeID, _ := req.Params.Arguments["node_id"].(string)
 	ctxFilter, _ := req.Params.Arguments["context"].(string)
 	dimension, _ := req.Params.Arguments["dimension"].(string)
@@ -283,6 +297,9 @@ func (s *Server) handleQueryMetrics(ctx context.Context, req mcp.CallToolRequest
 }
 
 func (s *Server) handleSummarize(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	nodeID, _ := req.Params.Arguments["node_id"].(string)
 	afterStr, _ := req.Params.Arguments["after"].(string)
 	beforeStr, _ := req.Params.Arguments["before"].(string)
@@ -543,6 +560,9 @@ func buildSummary(nodeID string, from, to time.Time, stats map[string]map[string
 }
 
 func (s *Server) handleBottlenecks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	nodeID, _ := req.Params.Arguments["node_id"].(string)
 	afterStr, _ := req.Params.Arguments["after"].(string)
 

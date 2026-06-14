@@ -28,3 +28,10 @@ enabled_contexts:
 mcp_bind_addr: 127.0.0.1:8765
 
 log_level: info
+
+# Automatically delete samples older than this many days (0 to disable)
+retention_days: 30
+
+# Optional: bearer token to protect MCP HTTP/SSE endpoints.
+# When set, clients must provide "Authorization: Bearer <token>" header.
+# mcp_auth_token: "my-secret-token"

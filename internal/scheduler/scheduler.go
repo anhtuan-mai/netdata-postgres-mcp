@@ -16,13 +16,14 @@ import (
 
 // Scheduler periodically collects metrics and stores them.
 type Scheduler struct {
-	collector *collector.Collector
-	store     *store.Store
-	interval  time.Duration
-	nodeID    string
-	hostname  string
-	baseURL   string
-	logger    *slog.Logger
+	collector     *collector.Collector
+	store         *store.Store
+	interval      time.Duration
+	nodeID        string
+	hostname      string
+	baseURL       string
+	retentionDays int
+	logger        *slog.Logger
 }
 
 // New creates a Scheduler that collects every intervalSec seconds.
@@ -34,14 +35,20 @@ func New(
 	logger *slog.Logger,
 ) *Scheduler {
 	return &Scheduler{
-		collector: col,
-		store:     st,
-		interval:  time.Duration(intervalSec) * time.Second,
-		nodeID:    nodeID,
-		hostname:  hostname,
-		baseURL:   baseURL,
-		logger:    logger,
+		collector:     col,
+		store:         st,
+		interval:      time.Duration(intervalSec) * time.Second,
+		nodeID:        nodeID,
+		hostname:      hostname,
+		baseURL:       baseURL,
+		retentionDays: 30, // default, overridden by SetRetentionDays
+		logger:        logger,
 	}
+}
+
+// SetRetentionDays configures automatic data retention. Set to 0 to disable.
+func (s *Scheduler) SetRetentionDays(days int) {
+	s.retentionDays = days
 }
 
 // Run starts the collection loop. It blocks until ctx is cancelled.
@@ -51,7 +58,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	s.logger.Info("scheduler starting",
 		"interval", s.interval.String(),
 		"node_id", s.nodeID,
+		"retention_days", s.retentionDays,
 	)
+
+	// Start retention cleanup goroutine
+	if s.retentionDays > 0 {
+		go s.retentionLoop(ctx)
+	}
 
 	// Run an initial collection immediately
 	s.collectOnce(ctx)
@@ -86,11 +99,30 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 		return err
 	}
 
-	// Collect metrics from Netdata
-	samples, err := s.collector.Collect(ctx)
-	if err != nil {
-		s.logger.Error("failed to collect metrics", "error", err)
-		return err
+	// Collect metrics from Netdata with retry
+	var samples []store.MetricSample
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var err error
+		samples, err = s.collector.Collect(ctx)
+		if err == nil {
+			break
+		}
+		lastErr = err
+		if attempt < 3 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s
+			s.logger.Warn("collection failed, retrying",
+				"attempt", attempt, "error", err, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	if lastErr != nil && len(samples) == 0 {
+		s.logger.Error("failed to collect metrics after 3 attempts", "error", lastErr)
+		return lastErr
 	}
 
 	if len(samples) == 0 {
@@ -113,4 +145,36 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+// retentionLoop runs daily to delete samples older than retentionDays.
+func (s *Scheduler) retentionLoop(ctx context.Context) {
+	retention := time.Duration(s.retentionDays) * 24 * time.Hour
+	s.logger.Info("retention cleanup enabled", "retention", retention.String())
+
+	// Run once at startup
+	s.runRetention(ctx, retention)
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runRetention(ctx, retention)
+		}
+	}
+}
+
+func (s *Scheduler) runRetention(ctx context.Context, retention time.Duration) {
+	deleted, err := s.store.DeleteOldSamples(ctx, retention)
+	if err != nil {
+		s.logger.Error("retention cleanup failed", "error", err)
+		return
+	}
+	if deleted > 0 {
+		s.logger.Info("retention cleanup complete", "deleted", deleted)
+	}
 }

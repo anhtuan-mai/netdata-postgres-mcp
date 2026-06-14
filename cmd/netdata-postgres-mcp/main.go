@@ -88,6 +88,8 @@ Environment:
   ENABLED_CONTEXTS             Comma-separated metric contexts
   MCP_BIND_ADDR                MCP HTTP server address (default: 127.0.0.1:8765)
   LOG_LEVEL                    Log level: debug, info, warn, error (default: info)
+  RETENTION_DAYS               Delete samples older than N days (default: 30, 0 to disable)
+  MCP_AUTH_TOKEN               Bearer token for MCP endpoints (optional, no auth if empty)
 `, version)
 }
 
@@ -205,6 +207,7 @@ func runService() {
 	hostname, _ := os.Hostname()
 	sched := scheduler.New(col, st, cfg.CollectionIntervalSeconds,
 		nodeID, hostname, cfg.NetdataBaseURL, logger)
+	sched.SetRetentionDays(cfg.RetentionDays)
 
 	// Build HTTP mux with health endpoints + MCP SSE server
 	mcpSrv := mcpserver.New(st.Pool(), logger)
@@ -213,7 +216,14 @@ func runService() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler(st.Pool()))
-	mux.Handle("/", sseServer) // SSE + message endpoints
+
+	// Wrap MCP endpoints with auth middleware if configured
+	var mcpHandler http.Handler = sseServer
+	if cfg.MCPAuthToken != "" {
+		mcpHandler = authMiddleware(cfg.MCPAuthToken, sseServer)
+		logger.Info("MCP auth enabled — bearer token required for /sse and /message")
+	}
+	mux.Handle("/", mcpHandler)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.MCPBindAddr,
@@ -315,4 +325,29 @@ func readyzHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			"status": "ready",
 		})
 	}
+}
+
+// authMiddleware validates bearer token for MCP endpoints.
+// Health endpoints (/healthz, /readyz) are NOT wrapped by this.
+func authMiddleware(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			// Also check query parameter for SSE clients that can't set headers
+			if q := r.URL.Query().Get("token"); q != "" {
+				auth = "Bearer " + q
+			}
+		}
+
+		expected := "Bearer " + token
+		if auth != expected {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "unauthorized — provide Authorization: Bearer <token>",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
