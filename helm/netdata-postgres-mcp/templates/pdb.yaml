@@ -1,0 +1,13 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "netdata-postgres-mcp.fullname" . }}
+  labels:
+    {{- include "netdata-postgres-mcp.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "netdata-postgres-mcp.selectorLabels" . | nindent 6 }}
+{{- end }}

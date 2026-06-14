@@ -1,0 +1,100 @@
+# Prometheus alerting rules for netdata-postgres-mcp
+# Add to your Prometheus config: rule_files: ["path/to/alerts.yml"]
+
+groups:
+  - name: netdata-mcp
+    rules:
+      # High error rate — more than 20% of collections failing over 10 minutes
+      - alert: NetdataMCPHighErrorRate
+        expr: |
+          (
+            rate(netdata_mcp_collection_errors_total[10m])
+            / rate(netdata_mcp_collections_total[10m])
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High collection error rate"
+          description: >
+            More than 20% of metric collection cycles are failing.
+            Current error rate: {{ $value | humanizePercentage }}.
+
+      # All collections failing — 100% error rate
+      - alert: NetdataMCPCollectionDown
+        expr: |
+          rate(netdata_mcp_collections_total[5m]) > 0
+          and rate(netdata_mcp_collection_errors_total[5m]) == rate(netdata_mcp_collections_total[5m])
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All metric collections are failing"
+          description: >
+            Every collection cycle in the last 5 minutes has failed.
+            Check Netdata agent connectivity and PostgreSQL status.
+
+      # No collections happening at all
+      - alert: NetdataMCPNoCollections
+        expr: rate(netdata_mcp_collections_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No metric collections for 10 minutes"
+          description: >
+            The sidecar has not completed any collection cycles in 10 minutes.
+            The process may be down or stuck.
+
+      # Slow collection — individual cycles taking over 30 seconds
+      - alert: NetdataMCPSlowCollection
+        expr: netdata_mcp_collection_duration_seconds{stat="last"} > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow metric collection"
+          description: >
+            Collection cycles are taking over 30 seconds.
+            Last duration: {{ $value | humanizeDuration }}.
+            Check Netdata API latency and PostgreSQL insert performance.
+
+      # Very slow collection — over 60 seconds
+      - alert: NetdataMCPVerySlowCollection
+        expr: netdata_mcp_collection_duration_seconds{stat="last"} > 60
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Very slow metric collection"
+          description: >
+            Collection cycles are taking over 60 seconds.
+            This may cause missed intervals and data gaps.
+
+      # No samples being inserted
+      - alert: NetdataMCPNoSamplesInserted
+        expr: |
+          rate(netdata_mcp_collections_total[10m]) > 0
+          and rate(netdata_mcp_samples_inserted_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collections running but no samples inserted"
+          description: >
+            The sidecar is running collection cycles but not inserting any samples.
+            This could indicate that Netdata is returning empty responses or
+            all samples are duplicates.
+
+      # Retention cleanup removing large amounts of data
+      - alert: NetdataMCPHighRetentionDeletion
+        expr: increase(netdata_mcp_retention_deleted_total[1h]) > 1000000
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Large retention cleanup"
+          description: >
+            Over 1M samples deleted in the last hour by retention cleanup.
+            Deleted: {{ $value | humanize }} samples.
+            This is informational — may indicate first cleanup after enabling retention.

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "netdata-postgres-mcp.fullname" . }}
+  labels:
+    {{- include "netdata-postgres-mcp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: mcp
+      protocol: TCP
+      name: mcp
+  selector:
+    {{- include "netdata-postgres-mcp.selectorLabels" . | nindent 4 }}

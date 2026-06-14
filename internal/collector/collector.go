@@ -103,16 +103,6 @@ func (c *Collector) Collect(ctx context.Context) ([]store.MetricSample, error) {
 	return samples, nil
 }
 
-// netdataV3Response represents the Netdata /api/v3/data JSON response.
-// The response shape uses parallel arrays: "labels" holds column names,
-// and "result" contains data rows keyed by a composite label string.
-type netdataV3Response struct {
-	Labels []string                   `json:"labels"`
-	Result map[string]json.RawMessage `json:"result"`
-	// v3 data endpoint can also return a flat structure
-	Data [][]interface{} `json:"data"`
-}
-
 // collectJSON queries /api/v3/data with group_by=dimension,node,instance.
 func (c *Collector) collectJSON(ctx context.Context) ([]store.MetricSample, error) {
 	contextsParam := strings.Join(c.contexts, ",")

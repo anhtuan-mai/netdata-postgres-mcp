@@ -29,8 +29,10 @@ import (
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/config"
 	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/middleware"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/scheduler"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/store"
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/tracing"
 
 	mcpstdio "github.com/mark3labs/mcp-go/server"
 )
@@ -92,6 +94,11 @@ Environment:
   LOG_FORMAT                   Log format: text, json (default: text)
   RETENTION_DAYS               Delete samples older than N days (default: 30, 0 to disable)
   MCP_AUTH_TOKEN               Bearer token for MCP endpoints (optional, no auth if empty)
+  RATE_LIMIT_RPS               Max requests per second per IP (default: 0 = disabled)
+  TLS_CERT_FILE                Path to TLS certificate file (enables HTTPS)
+  TLS_KEY_FILE                 Path to TLS private key file (enables HTTPS)
+  NETDATA_NODES                Comma-separated Netdata URLs for multi-node collection
+  OTEL_EXPORTER_OTLP_ENDPOINT  OpenTelemetry OTLP endpoint (optional, enables tracing)
 `, version)
 }
 
@@ -189,6 +196,14 @@ func runService() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Initialize optional OpenTelemetry tracing
+	shutdownTracing, err := tracing.Init(ctx, version, logger)
+	if err != nil {
+		logger.Warn("failed to initialize tracing", "error", err)
+	} else {
+		defer shutdownTracing(context.Background())
+	}
+
 	st, err := store.New(ctx, cfg.PostgresDSN, logger)
 	if err != nil {
 		logger.Error("failed to connect to database", "error", err)
@@ -202,19 +217,27 @@ func runService() {
 		os.Exit(1)
 	}
 
-	col := collector.New(cfg.NetdataBaseURL, cfg.NetdataAPIKey, cfg.NodeID,
-		cfg.EnabledContexts, cfg.CollectionIntervalSeconds, logger)
-
-	nodeID, err := col.ResolveNodeID(ctx)
-	if err != nil {
-		logger.Error("failed to resolve node ID", "error", err)
-		os.Exit(1)
-	}
-
+	// Set up collectors and schedulers for all configured nodes
+	nodes := cfg.EffectiveNodes()
 	hostname, _ := os.Hostname()
-	sched := scheduler.New(col, st, cfg.CollectionIntervalSeconds,
-		nodeID, hostname, cfg.NetdataBaseURL, logger)
-	sched.SetRetentionDays(cfg.RetentionDays)
+	var schedulers []*scheduler.Scheduler
+
+	for _, nodeCfg := range nodes {
+		nodeLogger := logger.With("base_url", nodeCfg.BaseURL)
+		col := collector.New(nodeCfg.BaseURL, nodeCfg.APIKey, nodeCfg.NodeID,
+			cfg.EnabledContexts, cfg.CollectionIntervalSeconds, nodeLogger)
+
+		nodeID, err := col.ResolveNodeID(ctx)
+		if err != nil {
+			nodeLogger.Error("failed to resolve node ID", "error", err)
+			os.Exit(1)
+		}
+
+		sched := scheduler.New(col, st, cfg.CollectionIntervalSeconds,
+			nodeID, hostname, nodeCfg.BaseURL, nodeLogger)
+		sched.SetRetentionDays(cfg.RetentionDays)
+		schedulers = append(schedulers, sched)
+	}
 
 	// Build HTTP mux with health endpoints + MCP SSE server
 	mcpSrv := mcpserver.New(st.Pool(), logger)
@@ -231,6 +254,11 @@ func runService() {
 		mcpHandler = authMiddleware(cfg.MCPAuthToken, sseServer)
 		logger.Info("MCP auth enabled — bearer token required for /sse and /message")
 	}
+	if cfg.RateLimitRPS > 0 {
+		rl := middleware.NewRateLimiter(cfg.RateLimitRPS, int(cfg.RateLimitRPS)*2+1)
+		mcpHandler = rl.Handler(mcpHandler)
+		logger.Info("rate limiting enabled", "rps", cfg.RateLimitRPS)
+	}
 	mux.Handle("/", mcpHandler)
 
 	httpSrv := &http.Server{
@@ -240,21 +268,40 @@ func runService() {
 	}
 
 	go func() {
-		logger.Info("HTTP server starting", "addr", cfg.MCPBindAddr,
-			"endpoints", []string{"/healthz", "/readyz", "/metrics", "/sse", "/message"})
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server error", "error", err)
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			logger.Info("HTTPS server starting", "addr", cfg.MCPBindAddr,
+				"endpoints", []string{"/healthz", "/readyz", "/metrics", "/sse", "/message"},
+				"tls", true)
+			if err := httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+				logger.Error("HTTPS server error", "error", err)
+			}
+		} else {
+			logger.Info("HTTP server starting", "addr", cfg.MCPBindAddr,
+				"endpoints", []string{"/healthz", "/readyz", "/metrics", "/sse", "/message"})
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("HTTP server error", "error", err)
+			}
 		}
 	}()
 
-	// Start collection scheduler (blocks until ctx cancelled)
-	logger.Info("starting scheduler and MCP server",
-		"node_id", nodeID,
+	// Start collection schedulers (first one blocks, rest run as goroutines)
+	logger.Info("starting schedulers and MCP server",
+		"node_count", len(schedulers),
 		"mcp_addr", cfg.MCPBindAddr,
 		"interval", cfg.CollectionIntervalSeconds,
 	)
 
-	if err := sched.Run(ctx); err != nil && ctx.Err() == nil {
+	// Run additional schedulers as goroutines
+	for i := 1; i < len(schedulers); i++ {
+		go func(s *scheduler.Scheduler) {
+			if err := s.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("scheduler error", "error", err)
+			}
+		}(schedulers[i])
+	}
+
+	// First scheduler blocks the main goroutine
+	if err := schedulers[0].Run(ctx); err != nil && ctx.Err() == nil {
 		logger.Error("scheduler error", "error", err)
 		os.Exit(1)
 	}

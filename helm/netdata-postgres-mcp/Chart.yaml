@@ -1,0 +1,15 @@
+apiVersion: v2
+name: netdata-postgres-mcp
+description: A sidecar that stores Netdata metrics in PostgreSQL and serves them via MCP
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - netdata
+  - postgres
+  - mcp
+  - monitoring
+  - metrics
+home: https://github.com/anhtuan-mai/netdata-postgres-mcp
+maintainers:
+  - name: anhtuan-mai

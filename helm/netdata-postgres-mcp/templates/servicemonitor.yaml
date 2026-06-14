@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "netdata-postgres-mcp.fullname" . }}
+  labels:
+    {{- include "netdata-postgres-mcp.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "netdata-postgres-mcp.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: mcp
+      interval: {{ .Values.serviceMonitor.interval }}
+      path: {{ .Values.serviceMonitor.path }}
+{{- end }}

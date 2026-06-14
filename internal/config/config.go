@@ -44,6 +44,18 @@ type Config struct {
 	LogFormat                 string   `yaml:"log_format"`
 	RetentionDays             int      `yaml:"retention_days"`
 	MCPAuthToken              string   `yaml:"mcp_auth_token"`
+	RateLimitRPS              float64  `yaml:"rate_limit_rps"`
+	TLSCertFile               string       `yaml:"tls_cert_file"`
+	TLSKeyFile                string       `yaml:"tls_key_file"`
+	Nodes                     []NodeConfig `yaml:"nodes"`
+}
+
+// NodeConfig defines a single Netdata node to collect from.
+// Used in multi-node mode when multiple agents are monitored by one sidecar.
+type NodeConfig struct {
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+	NodeID  string `yaml:"node_id"`
 }
 
 // Defaults returns a Config with all default values applied.
@@ -98,6 +110,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// EffectiveNodes returns the list of nodes to collect from.
+// If Nodes is empty, it returns a single node from NetdataBaseURL/NetdataAPIKey/NodeID
+// for backward compatibility with single-node configuration.
+func (c *Config) EffectiveNodes() []NodeConfig {
+	if len(c.Nodes) > 0 {
+		return c.Nodes
+	}
+	return []NodeConfig{{
+		BaseURL: c.NetdataBaseURL,
+		APIKey:  c.NetdataAPIKey,
+		NodeID:  c.NodeID,
+	}}
+}
+
 // applyEnv overrides config fields from environment variables.
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("NETDATA_BASE_URL"); v != "" {
@@ -145,5 +171,28 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MCP_AUTH_TOKEN"); v != "" {
 		cfg.MCPAuthToken = v
+	}
+	if v := os.Getenv("RATE_LIMIT_RPS"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.RateLimitRPS = n
+		}
+	}
+	if v := os.Getenv("TLS_CERT_FILE"); v != "" {
+		cfg.TLSCertFile = v
+	}
+	if v := os.Getenv("TLS_KEY_FILE"); v != "" {
+		cfg.TLSKeyFile = v
+	}
+	if v := os.Getenv("NETDATA_NODES"); v != "" {
+		parts := strings.Split(v, ",")
+		nodes := make([]NodeConfig, 0, len(parts))
+		for _, p := range parts {
+			if u := strings.TrimSpace(p); u != "" {
+				nodes = append(nodes, NodeConfig{BaseURL: u})
+			}
+		}
+		if len(nodes) > 0 {
+			cfg.Nodes = nodes
+		}
 	}
 }
