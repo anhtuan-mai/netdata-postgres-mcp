@@ -50,19 +50,51 @@ type Store struct {
 	logger *slog.Logger
 }
 
+// PoolOptions holds pgxpool tuning overrides.
+type PoolOptions struct {
+	MinConns          int32
+	MaxConns          int32
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
+}
+
 // New creates a new Store with a connection pool to the given DSN.
 func New(ctx context.Context, dsn string, logger *slog.Logger) (*Store, error) {
+	return NewWithPoolOptions(ctx, dsn, logger, nil)
+}
+
+// NewWithPoolOptions creates a Store with custom pool tuning. If opts is nil, defaults are used.
+func NewWithPoolOptions(ctx context.Context, dsn string, logger *slog.Logger, opts *PoolOptions) (*Store, error) {
 	poolCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing postgres DSN: %w", err)
 	}
 
-	// Sensible pool defaults for a sidecar workload.
+	// Apply defaults, then overrides.
 	poolCfg.MaxConns = 10
 	poolCfg.MinConns = 2
 	poolCfg.MaxConnLifetime = 30 * time.Minute
 	poolCfg.MaxConnIdleTime = 5 * time.Minute
 	poolCfg.HealthCheckPeriod = 30 * time.Second
+
+	if opts != nil {
+		if opts.MaxConns > 0 {
+			poolCfg.MaxConns = opts.MaxConns
+		}
+		if opts.MinConns > 0 {
+			poolCfg.MinConns = opts.MinConns
+		}
+		if opts.MaxConnLifetime > 0 {
+			poolCfg.MaxConnLifetime = opts.MaxConnLifetime
+		}
+		if opts.MaxConnIdleTime > 0 {
+			poolCfg.MaxConnIdleTime = opts.MaxConnIdleTime
+		}
+		if opts.HealthCheckPeriod > 0 {
+			poolCfg.HealthCheckPeriod = opts.HealthCheckPeriod
+		}
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

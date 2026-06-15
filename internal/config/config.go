@@ -49,6 +49,7 @@ type Config struct {
 	TLSKeyFile                string           `yaml:"tls_key_file"`
 	Nodes                     []NodeConfig     `yaml:"nodes"`
 	DerivedContexts           []DerivedContext  `yaml:"derived_contexts"`
+	Pool                      PoolConfig       `yaml:"pool"`
 }
 
 // NodeConfig defines a single Netdata node to collect from.
@@ -69,6 +70,7 @@ func Defaults() Config {
 		LogLevel:                  "info",
 		LogFormat:                 "text",
 		RetentionDays:             30,
+		Pool:                      DefaultPoolConfig(),
 	}
 }
 

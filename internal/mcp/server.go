@@ -59,6 +59,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger) *Server {
 		mcp.WithString("context", mcp.Description("Filter by metric context (e.g. 'system.cpu').")),
 		mcp.WithString("dimension", mcp.Description("Filter by dimension (e.g. 'user', 'system').")),
 		mcp.WithString("instance", mcp.Description("Filter by instance (e.g. disk name, mount point).")),
+		mcp.WithString("labels", mcp.Description("Filter by labels as comma-separated key=value pairs (e.g. 'env=prod,region=us'). Uses JSONB containment.")),
 		mcp.WithString("after", mcp.Description("Start time as ISO timestamp or relative duration like '-1h', '-30m'.")),
 		mcp.WithString("before", mcp.Description("End time as ISO timestamp.")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of results. Default 500.")),
@@ -81,6 +82,11 @@ func New(pool *pgxpool.Pool, logger *slog.Logger) *Server {
 
 	s.srv = srv
 	s.registerAlertTools()
+	s.registerRollupTools()
+	s.registerCardinalityTools()
+	s.registerAnomalyTools()
+	s.registerForecastTools()
+	s.registerNLQueryTools()
 	return s
 }
 
@@ -205,6 +211,7 @@ func (s *Server) handleQueryMetrics(ctx context.Context, req mcp.CallToolRequest
 	ctxFilter, _ := req.Params.Arguments["context"].(string)
 	dimension, _ := req.Params.Arguments["dimension"].(string)
 	instance, _ := req.Params.Arguments["instance"].(string)
+	labelsStr, _ := req.Params.Arguments["labels"].(string)
 	afterStr, _ := req.Params.Arguments["after"].(string)
 	beforeStr, _ := req.Params.Arguments["before"].(string)
 	limitF, _ := req.Params.Arguments["limit"].(float64)
@@ -244,6 +251,14 @@ func (s *Server) handleQueryMetrics(ctx context.Context, req mcp.CallToolRequest
 		query += fmt.Sprintf(" AND instance = $%d", argIdx)
 		args = append(args, instance)
 		argIdx++
+	}
+	if labelsStr != "" {
+		labelClause, labelArgs := labelFilter(labelsStr, argIdx)
+		if labelClause != "" {
+			query += labelClause
+			args = append(args, labelArgs...)
+			argIdx++
+		}
 	}
 	if afterStr != "" {
 		afterTime, err := parseTimeArg(afterStr)

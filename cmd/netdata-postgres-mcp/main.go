@@ -30,6 +30,7 @@ import (
 	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/middleware"
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/remotewrite"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/scheduler"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/store"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/tracing"
@@ -74,12 +75,36 @@ func printUsage() {
 A sidecar that stores Netdata metrics in PostgreSQL and serves them via MCP.
 
 Commands:
-  migrate        Run database migrations
-  collect-once   Collect metrics once and exit
-  run            Start scheduler + MCP server (HTTP/SSE)
-  mcp            Start MCP server only (stdio transport)
+  migrate        Run database migrations (idempotent, safe to re-run)
+  collect-once   Collect metrics once and exit (useful for cron/testing)
+  run            Start scheduler + MCP server (HTTP/SSE) — main production mode
+  mcp            Start MCP server only (stdio transport for AI assistants)
   version        Show version
   help           Show this help
+
+Subcommand Details:
+  migrate:
+    Applies all pending SQL migrations from internal/store/migrations/.
+    Idempotent — safe to run multiple times. Creates tables for metrics,
+    nodes, rollups, tenants, and API tokens.
+    Example: netdata-postgres-mcp migrate
+
+  collect-once:
+    Connects to Netdata, collects one round of metrics, inserts into
+    PostgreSQL, then exits. Useful for testing or cron-based collection.
+    Example: POSTGRES_DSN=... NETDATA_BASE_URL=... netdata-postgres-mcp collect-once
+
+  run:
+    Main production mode. Starts the metric collection scheduler and
+    HTTP/SSE MCP server. Serves /healthz, /readyz, /metrics (Prometheus),
+    /sse, /message, and /api/v1/write (remote-write receiver).
+    Supports SIGHUP for config hot-reload without restart.
+    Example: netdata-postgres-mcp run
+
+  mcp:
+    Starts MCP server on stdio (stdin/stdout). Designed for direct
+    connection from AI assistants like Claude Desktop or Cursor.
+    Example: netdata-postgres-mcp mcp
 
 Environment:
   CONFIG_FILE                  Path to YAML config (optional)
@@ -99,6 +124,11 @@ Environment:
   TLS_KEY_FILE                 Path to TLS private key file (enables HTTPS)
   NETDATA_NODES                Comma-separated Netdata URLs for multi-node collection
   OTEL_EXPORTER_OTLP_ENDPOINT  OpenTelemetry OTLP endpoint (optional, enables tracing)
+
+Signals:
+  SIGHUP     Reload configuration without restart
+  SIGINT     Graceful shutdown
+  SIGTERM    Graceful shutdown
 `, version)
 }
 
@@ -208,7 +238,13 @@ func runService() {
 		defer shutdownTracing(context.Background())
 	}
 
-	st, err := store.New(ctx, cfg.PostgresDSN, logger)
+	st, err := store.NewWithPoolOptions(ctx, cfg.PostgresDSN, logger, &store.PoolOptions{
+		MinConns:          cfg.Pool.MinConns,
+		MaxConns:          cfg.Pool.MaxConns,
+		MaxConnLifetime:   cfg.Pool.MaxConnLifetime,
+		MaxConnIdleTime:   cfg.Pool.MaxConnIdleTime,
+		HealthCheckPeriod: cfg.Pool.HealthCheckPeriod,
+	})
 	if err != nil {
 		logger.Error("failed to connect to database", "error", err)
 		os.Exit(1)
@@ -252,6 +288,15 @@ func runService() {
 	mux.HandleFunc("/readyz", readyzHandler(st.Pool()))
 	mux.HandleFunc("/metrics", metrics.Handler())
 
+	// Remote-write receiver for Prometheus metrics
+	rwNodeID := cfg.NodeID
+	if rwNodeID == "" {
+		rwNodeID = "remote-write"
+	}
+	rwHandler := remotewrite.NewHandler(st.Pool(), rwNodeID, logger)
+	mux.Handle("/api/v1/write", rwHandler)
+	logger.Info("Prometheus remote-write endpoint enabled", "path", "/api/v1/write")
+
 	// Wrap MCP endpoints with auth middleware if configured
 	var mcpHandler http.Handler = sseServer
 	if cfg.MCPAuthToken != "" {
@@ -285,6 +330,29 @@ func runService() {
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("HTTP server error", "error", err)
 			}
+		}
+	}()
+
+	// SIGHUP config reload
+	go func() {
+		sighup := make(chan os.Signal, 1)
+		signal.Notify(sighup, syscall.SIGHUP)
+		for range sighup {
+			logger.Info("received SIGHUP, reloading configuration")
+			newCfg, err := config.Load(os.Getenv("CONFIG_FILE"))
+			if err != nil {
+				logger.Error("config reload failed", "error", err)
+				continue
+			}
+			// Apply hot-reloadable settings
+			if newCfg.RetentionDays != cfg.RetentionDays {
+				for _, s := range schedulers {
+					s.SetRetentionDays(newCfg.RetentionDays)
+				}
+				logger.Info("reloaded retention_days", "value", newCfg.RetentionDays)
+			}
+			cfg = newCfg
+			logger.Info("configuration reloaded successfully")
 		}
 	}()
 
