@@ -1,11 +1,8 @@
 suite: deployment
 templates:
   - templates/deployment.yaml
-  - templates/secret.yaml
-  - templates/configmap.yaml
 tests:
   - it: should render with defaults
-    documentIndex: 0
     asserts:
       - isKind:
           of: Deployment
@@ -17,7 +14,6 @@ tests:
           pattern: "netdata-postgres-mcp:.*"
 
   - it: should set environment variables
-    documentIndex: 0
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -26,7 +22,6 @@ tests:
           any: true
 
   - it: should set resource limits when specified
-    documentIndex: 0
     set:
       resources:
         limits:
@@ -44,7 +39,6 @@ tests:
           value: 256Mi
 
   - it: should set replicas
-    documentIndex: 0
     set:
       replicaCount: 3
     asserts:
