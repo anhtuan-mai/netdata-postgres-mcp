@@ -30,10 +30,10 @@ CREATE TABLE IF NOT EXISTS hardware_metric_samples (
 );
 
 -- Prevent duplicate samples for the same metric at the same timestamp.
--- coalesce ensures NULLable columns participate in uniqueness.
-ALTER TABLE hardware_metric_samples
-    ADD CONSTRAINT uq_metric_sample
-    UNIQUE (node_id, collected_at, context, dimension,
+-- Uses a unique index (not constraint) because coalesce() expressions
+-- are not allowed in ALTER TABLE ... ADD CONSTRAINT UNIQUE(...).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metric_sample
+    ON hardware_metric_samples (node_id, collected_at, context, dimension,
             COALESCE(chart, ''), COALESCE(instance, ''));
 
 -- Query indexes: time-series lookups by node, context, and combined.

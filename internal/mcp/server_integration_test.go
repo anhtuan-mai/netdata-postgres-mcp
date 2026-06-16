@@ -60,13 +60,13 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 		pool.Exec(ctx, `INSERT INTO hardware_metric_samples
 			(node_id, collected_at, context, chart, family, dimension, unit, value, labels)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			ON CONFLICT ON CONSTRAINT uq_metric_sample DO NOTHING`,
+			ON CONFLICT DO NOTHING`,
 			"test-mcp-node", ts, "system.cpu", "system.cpu", "cpu", "user", "percentage",
 			float64(20+i), map[string]string{})
 		pool.Exec(ctx, `INSERT INTO hardware_metric_samples
 			(node_id, collected_at, context, chart, family, dimension, unit, value, labels)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			ON CONFLICT ON CONSTRAINT uq_metric_sample DO NOTHING`,
+			ON CONFLICT DO NOTHING`,
 			"test-mcp-node", ts, "system.ram", "system.ram", "ram", "used", "MiB",
 			float64(4096+i*100), map[string]string{})
 	}

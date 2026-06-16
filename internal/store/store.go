@@ -294,7 +294,7 @@ func (s *Store) insertBatch(ctx context.Context, tx pgx.Tx, samples []MetricSamp
 		)
 	}
 
-	b.WriteString(" ON CONFLICT ON CONSTRAINT uq_metric_sample DO NOTHING")
+	b.WriteString(" ON CONFLICT DO NOTHING")
 
 	tag, err := tx.Exec(ctx, b.String(), args...)
 	if err != nil {
