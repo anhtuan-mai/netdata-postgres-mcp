@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/circuitbreaker"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/collector"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/store"
@@ -24,6 +25,7 @@ type Scheduler struct {
 	hostname      string
 	baseURL       string
 	retentionDays int
+	breaker       *circuitbreaker.Breaker
 	logger        *slog.Logger
 }
 
@@ -43,6 +45,7 @@ func New(
 		hostname:      hostname,
 		baseURL:       baseURL,
 		retentionDays: 30, // default, overridden by SetRetentionDays
+		breaker:       circuitbreaker.New(5, 60*time.Second),
 		logger:        logger,
 	}
 }
@@ -91,6 +94,13 @@ func (s *Scheduler) CollectOnce(ctx context.Context) error {
 }
 
 func (s *Scheduler) collectOnce(ctx context.Context) error {
+	// Check circuit breaker before attempting collection
+	if err := s.breaker.Allow(); err != nil {
+		s.logger.Warn("circuit breaker open — skipping collection cycle",
+			"state", s.breaker.State())
+		return err
+	}
+
 	start := time.Now()
 	s.logger.Info("starting collection cycle")
 
@@ -124,6 +134,7 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 	if lastErr != nil && len(samples) == 0 {
 		s.logger.Error("failed to collect metrics after 3 attempts", "error", lastErr)
 		metrics.Global.CollectionErrors.Add(1)
+		s.breaker.RecordFailure()
 		return lastErr
 	}
 
@@ -136,8 +147,11 @@ func (s *Scheduler) collectOnce(ctx context.Context) error {
 	inserted, err := s.store.InsertSamples(ctx, samples)
 	if err != nil {
 		s.logger.Error("failed to insert samples", "error", err, "total", len(samples))
+		s.breaker.RecordFailure()
 		return err
 	}
+
+	s.breaker.RecordSuccess()
 
 	elapsed := time.Since(start)
 	metrics.Global.CollectionTotal.Add(1)

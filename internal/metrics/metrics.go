@@ -21,6 +21,18 @@ type Metrics struct {
 	SamplesInserted    atomic.Int64
 	RetentionDeleted   atomic.Int64
 	CollectionDuration syncDuration
+
+	// MCP tool observability
+	MCPToolCalls  atomic.Int64
+	MCPToolErrors atomic.Int64
+
+	// Auth and rate limiting
+	AuthFailures      atomic.Int64
+	RateLimitRejects  atomic.Int64
+
+	// Remote-write
+	RemoteWriteSamples atomic.Int64
+	RemoteWriteErrors  atomic.Int64
 }
 
 type syncDuration struct {
@@ -79,6 +91,30 @@ func Handler() http.HandlerFunc {
 		fmt.Fprintf(&b, "netdata_mcp_collection_duration_seconds{stat=\"last\"} %.6f\n", last.Seconds())
 		fmt.Fprintf(&b, "netdata_mcp_collection_duration_seconds{stat=\"avg\"} %.6f\n", avg.Seconds())
 		fmt.Fprintf(&b, "netdata_mcp_collection_duration_seconds{stat=\"count\"} %d\n\n", count)
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_tool_calls_total Total MCP tool invocations.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_tool_calls_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_tool_calls_total %d\n\n", m.MCPToolCalls.Load())
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_tool_errors_total Total MCP tool errors.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_tool_errors_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_tool_errors_total %d\n\n", m.MCPToolErrors.Load())
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_auth_failures_total Total authentication failures.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_auth_failures_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_auth_failures_total %d\n\n", m.AuthFailures.Load())
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_ratelimit_rejects_total Total requests rejected by rate limiter.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_ratelimit_rejects_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_ratelimit_rejects_total %d\n\n", m.RateLimitRejects.Load())
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_remotewrite_samples_total Total samples ingested via remote-write.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_remotewrite_samples_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_remotewrite_samples_total %d\n\n", m.RemoteWriteSamples.Load())
+
+		fmt.Fprintf(&b, "# HELP netdata_mcp_remotewrite_errors_total Total remote-write ingest errors.\n")
+		fmt.Fprintf(&b, "# TYPE netdata_mcp_remotewrite_errors_total counter\n")
+		fmt.Fprintf(&b, "netdata_mcp_remotewrite_errors_total %d\n\n", m.RemoteWriteErrors.Load())
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.WriteHeader(http.StatusOK)

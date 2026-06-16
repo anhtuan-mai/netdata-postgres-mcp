@@ -12,8 +12,10 @@ import (
 // Processes samples from the given time range that haven't been aggregated yet.
 // Returns the number of rollup rows upserted.
 func (s *Store) AggregateHourly(ctx context.Context, before time.Time) (int64, error) {
-	// Aggregate all samples older than 'before', grouped into hourly buckets.
+	// Aggregate samples from a bounded time window into hourly buckets.
+	// Lower bound prevents scanning the entire table; only processes the last 3 hours.
 	// Uses ON CONFLICT to be idempotent — safe to re-run on overlapping ranges.
+	lowerBound := before.Add(-3 * time.Hour)
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO hardware_metric_rollups_1h
 			(node_id, bucket, context, dimension, instance, unit, avg_value, min_value, max_value, sample_count)
@@ -29,7 +31,7 @@ func (s *Store) AggregateHourly(ctx context.Context, before time.Time) (int64, e
 			MAX(value) AS max_value,
 			COUNT(*)::INTEGER AS sample_count
 		FROM hardware_metric_samples
-		WHERE collected_at < $1
+		WHERE collected_at >= $1 AND collected_at < $2
 		GROUP BY node_id, date_trunc('hour', collected_at), context, dimension, COALESCE(instance, '')
 		ON CONFLICT ON CONSTRAINT uq_rollup_1h
 		DO UPDATE SET
@@ -38,7 +40,7 @@ func (s *Store) AggregateHourly(ctx context.Context, before time.Time) (int64, e
 			max_value = EXCLUDED.max_value,
 			sample_count = EXCLUDED.sample_count,
 			created_at = now()
-	`, before)
+	`, lowerBound, before)
 	if err != nil {
 		return 0, fmt.Errorf("aggregating hourly rollups: %w", err)
 	}

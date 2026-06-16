@@ -19,6 +19,8 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 )
 
 // Handler implements http.Handler for the Prometheus remote-write protocol.
@@ -62,12 +64,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	inserted, err := h.ingest(ctx, timeseries)
 	if err != nil {
+		metrics.Global.RemoteWriteErrors.Add(1)
 		h.logger.Error("remote-write ingest error", "error", err)
 		http.Error(w, "ingest error", http.StatusInternalServerError)
 		return
 	}
 
 	h.logger.Debug("remote-write ingested", "samples", inserted)
+	metrics.Global.RemoteWriteSamples.Add(int64(inserted))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -87,7 +91,15 @@ type prTimeSeries struct {
 }
 
 func (h *Handler) ingest(ctx context.Context, series []prTimeSeries) (int, error) {
-	count := 0
+	type row struct {
+		collectedAt time.Time
+		context     string
+		dimension   string
+		instance    string
+		value       float64
+	}
+
+	var rows []row
 	for _, ts := range series {
 		metricName := ""
 		instance := ""
@@ -103,24 +115,69 @@ func (h *Handler) ingest(ctx context.Context, series []prTimeSeries) (int, error
 		}
 
 		metricContext := metricToContext(metricName)
-		dimension := metricName
 
 		for _, s := range ts.Samples {
 			if math.IsNaN(s.Value) || math.IsInf(s.Value, 0) {
 				continue
 			}
-			collectedAt := time.Unix(0, s.TimestampMs*int64(time.Millisecond)).UTC()
-			_, err := h.pool.Exec(ctx, `
-				INSERT INTO hardware_metric_samples
-					(node_id, collected_at, context, dimension, instance, value)
-				VALUES ($1, $2, $3, $4, $5, $6)
-			`, h.nodeID, collectedAt, metricContext, dimension, instance, s.Value)
-			if err != nil {
-				return count, fmt.Errorf("insert sample: %w", err)
-			}
-			count++
+			rows = append(rows, row{
+				collectedAt: time.Unix(0, s.TimestampMs*int64(time.Millisecond)).UTC(),
+				context:     metricContext,
+				dimension:   metricName,
+				instance:    instance,
+				value:       s.Value,
+			})
 		}
 	}
+
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const batchSize = 500
+	count := 0
+
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		batch := rows[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO hardware_metric_samples
+			(node_id, collected_at, context, dimension, instance, value)
+			VALUES `)
+
+		args := make([]interface{}, 0, len(batch)*6)
+		for j, r := range batch {
+			if j > 0 {
+				b.WriteString(", ")
+			}
+			base := j * 6
+			fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d)",
+				base+1, base+2, base+3, base+4, base+5, base+6)
+			args = append(args, h.nodeID, r.collectedAt, r.context, r.dimension, r.instance, r.value)
+		}
+		b.WriteString(" ON CONFLICT DO NOTHING")
+
+		_, err := tx.Exec(ctx, b.String(), args...)
+		if err != nil {
+			return count, fmt.Errorf("batch insert at offset %d: %w", i, err)
+		}
+		count += len(batch)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit tx: %w", err)
+	}
+
 	return count, nil
 }
 

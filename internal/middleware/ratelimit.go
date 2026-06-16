@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
 )
 
 // RateLimiter implements a per-IP token bucket rate limiter.
@@ -76,6 +79,7 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := extractIP(r)
 		if !rl.Allow(ip) {
+			metrics.Global.RateLimitRejects.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -104,23 +108,31 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
-// extractIP extracts the client IP from the request, checking
-// X-Forwarded-For and X-Real-IP headers before falling back to RemoteAddr.
-func extractIP(r *http.Request) string {
-	// Check X-Forwarded-For (first IP in the chain is the client)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
-			}
-		}
-		return xff
-	}
+// TrustProxy controls whether the rate limiter trusts proxy headers
+// (X-Forwarded-For, X-Real-IP). When false, only r.RemoteAddr is used.
+// Default: false (safe for direct exposure; set true when behind a trusted
+// reverse proxy like nginx, Envoy, or a cloud load balancer).
+var TrustProxy = false
 
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+// extractIP extracts the client IP from the request.
+// When TrustProxy is true, checks X-Forwarded-For and X-Real-IP headers.
+// Otherwise, uses r.RemoteAddr only (prevents IP spoofing via headers).
+func extractIP(r *http.Request) string {
+	if TrustProxy {
+		// Check X-Forwarded-For (first IP in the chain is the client)
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			for i := 0; i < len(xff); i++ {
+				if xff[i] == ',' {
+					return strings.TrimSpace(xff[:i])
+				}
+			}
+			return strings.TrimSpace(xff)
+		}
+
+		// Check X-Real-IP
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
 	}
 
 	// Fall back to RemoteAddr

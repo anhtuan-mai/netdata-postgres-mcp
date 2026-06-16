@@ -104,7 +104,12 @@ func TestExtractIP_RemoteAddr(t *testing.T) {
 }
 
 func TestExtractIP_XForwardedFor(t *testing.T) {
+	old := TrustProxy
+	TrustProxy = true
+	defer func() { TrustProxy = old }()
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 10.0.0.1")
 	if ip := extractIP(req); ip != "1.2.3.4" {
 		t.Errorf("extractIP = %q, want 1.2.3.4", ip)
@@ -112,9 +117,28 @@ func TestExtractIP_XForwardedFor(t *testing.T) {
 }
 
 func TestExtractIP_XRealIP(t *testing.T) {
+	old := TrustProxy
+	TrustProxy = true
+	defer func() { TrustProxy = old }()
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
 	req.Header.Set("X-Real-IP", "9.8.7.6")
 	if ip := extractIP(req); ip != "9.8.7.6" {
 		t.Errorf("extractIP = %q, want 9.8.7.6", ip)
+	}
+}
+
+func TestExtractIP_NoTrustProxy(t *testing.T) {
+	old := TrustProxy
+	TrustProxy = false
+	defer func() { TrustProxy = old }()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.Header.Set("X-Real-IP", "9.8.7.6")
+	if ip := extractIP(req); ip != "192.0.2.1" {
+		t.Errorf("extractIP = %q, want 192.0.2.1 (should ignore proxy headers)", ip)
 	}
 }

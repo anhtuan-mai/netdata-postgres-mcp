@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -27,8 +28,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/collector"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/config"
-	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/metrics"
+	mcpserver "github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/mcp"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/middleware"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/remotewrite"
 	"github.com/netdata/netdata/contrib/netdata-postgres-mcp/internal/scheduler"
@@ -299,6 +300,7 @@ func runService() {
 
 	// Wrap MCP endpoints with auth middleware if configured
 	var mcpHandler http.Handler = sseServer
+	mcpHandler = maxBodyMiddleware(1<<20, mcpHandler) // 1 MiB limit on MCP requests
 	if cfg.MCPAuthToken != "" {
 		mcpHandler = authMiddleware(cfg.MCPAuthToken, sseServer)
 		logger.Info("MCP auth enabled — bearer token required for /sse and /message")
@@ -467,13 +469,24 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 		}
 
 		expected := "Bearer " + token
-		if auth != expected {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
+			metrics.Global.AuthFailures.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{
 				"error": "unauthorized — provide Authorization: Bearer <token>",
 			})
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxBodyMiddleware limits request body size to prevent OOM from oversized POSTs.
+func maxBodyMiddleware(maxBytes int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
