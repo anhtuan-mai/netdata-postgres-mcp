@@ -29,6 +29,15 @@ graph LR
 2. Collected metrics are batch-inserted into PostgreSQL with duplicate-safe upserts.
 3. **MCP Server** exposes five tools that AI assistants can call to query, summarize, and analyze the stored metrics.
 
+## Documentation
+
+| Guide | Description |
+|---|---|
+| **[INSTALL.md](INSTALL.md)** | Step-by-step installation for any server/VM (binary, Docker, Helm, source) |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Multi-node deployment across Ubuntu, RHEL, and Windows Server |
+| [API.md](API.md) | HTTP endpoints and MCP tools reference |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Developer setup and contribution guide |
+
 ## Quick start
 
 ### Prerequisites
@@ -352,7 +361,7 @@ GitHub Actions workflows are provided:
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed multi-node deployment guides covering Ubuntu, RHEL, and Windows Server.
+See **[INSTALL.md](INSTALL.md)** for single-server installation, and [DEPLOYMENT.md](DEPLOYMENT.md) for multi-node fleet deployment across Ubuntu, RHEL, and Windows Server.
 
 ## License
 
